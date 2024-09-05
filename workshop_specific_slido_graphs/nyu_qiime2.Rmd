@@ -1,0 +1,232 @@
+---
+title: "Slido graphs for NYU and QIIME2"
+author: "Kate Isaac"
+date: "2024-09-04"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(grid)
+library(scales)
+```
+
+```{r}
+slido_data <- read.csv("https://raw.githubusercontent.com/FredHutch/itn-dashboard/main/data/itcr_slido_data.csv")
+```
+
+## NYU
+
+```{r}
+slido_nyu <- slido_data %>%
+  filter(event_name ==
+           "Understanding_Gene_Expression_Data" | 
+         event_name ==
+           "Computing_for_Cancer_Informatics" | 
+         event_name ==
+           "AI_Considerations_for_Research") %>%
+  filter(!is.na(Participant.ID))
+
+slido_nyu <- slido_nyu[, colSums(is.na(slido_nyu)) != nrow(slido_nyu)]
+```
+
+### Pre-vs-Post Confidence
+
+```{r}
+to_plot_prepost <- 
+slido_nyu %>% select(contains("confident")) %>%
+  pivot_longer(everything()) %>%
+  mutate(pre_post = if_else(grepl("now", name), "post", "pre"),
+         workshop = case_when(str_detect(name, "AI") ~ "AI",
+                              str_detect(name, "computing") ~ "Computing",
+                              str_detect(name, "expression") ~ "Gene Expression"),
+         value = as.numeric(value))
+
+```
+
+```{r}
+
+get_to_bind <- function(inputdf, prepost, workshopOI){
+  nrankOI <- nrow(inputdf %>%
+    filter(pre_post == prepost & workshop == workshopOI) %>% drop_na())
+  
+  return(inputdf %>%
+    filter(pre_post == prepost & workshop == workshopOI) %>%
+    select(value) %>% `colnames<-`(c(paste(workshopOI,prepost, sep="-"))) %>%
+    colSums(na.rm = TRUE) %>%
+    as.data.frame() %>% `colnames<-`(c("totalRank")) %>%
+    mutate(avgRank = totalRank / nrankOI))
+}
+
+totalRanksdf <-
+  bind_rows(
+    get_to_bind(to_plot_prepost, "pre", "AI"),
+    get_to_bind(to_plot_prepost, "post", "AI"),
+    get_to_bind(to_plot_prepost, "pre", "Computing"),
+    get_to_bind(to_plot_prepost, "post", "Computing"),
+    get_to_bind(to_plot_prepost, "pre", "Gene Expression"),
+    get_to_bind(to_plot_prepost, "post", "Gene Expression")
+  ) %>%
+  mutate(workshop_info = rownames(.)) %>%
+  separate(workshop_info, c("workshop_name", "prepost"), sep="-") %>%
+  mutate(prepost = factor(prepost, levels = c("pre", "post")))
+```
+
+```{r}
+ggplot(totalRanksdf, 
+                    aes(x = avgRank, 
+                        y = reorder(workshop_name, -avgRank))) +
+  geom_line(arrow = arrow(length=unit(0.30,"cm"), ends="last", type = "closed")) +
+  geom_point(aes(color = prepost), size = 3) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ylab("") +
+  xlab("Average Confidence Rank") +
+  ggtitle("How confident do you feel about ... \nNYU Workshops 2024") +
+  theme(plot.margin = margin(1,1,1,1.1, "cm")) +
+  coord_cartesian(clip = "off") +
+  scale_x_continuous(limits = c(1,10), breaks = 1:10, labels = 1:10) +
+      annotation_custom(textGrob("Most\nConfident", gp=gpar(fontsize=8, fontface = "bold")),xmin=10,xmax=10,ymin=-0.1,ymax=-0.1) +
+      annotation_custom(textGrob("Least\nConfident", gp=gpar(fontsize=8, fontface= "bold")),xmin=1,xmax=1,ymin=-0.1,ymax=-0.1)
+
+```
+
+```{r}
+to_plot_prepost %>%
+  mutate(pre_post = factor(pre_post, levels = c("pre", "post"))) %>%
+  ggplot(aes(x = value, fill=pre_post)) +
+  geom_density(alpha=0.5) +
+  theme_bw() + theme(panel.background = element_blank()) +
+  theme(legend.position = "bottom") +
+  xlab("Confidence Rank") + scale_x_continuous(breaks = 1:10, labels = 1:10) +
+  facet_wrap(~workshop) +
+  ggtitle("How confident do you feel about ... \nNYU Workshops 2024") +
+  scale_fill_discrete(name = "Pre or post workshop?")
+```
+
+### Workshop Recommendation
+```{r}
+slido_nyu %>%
+  mutate(rec_likelihood = as.numeric(How.likely.are.you.to.recommend.this.workshop.),
+         event_name = case_when(str_detect(event_name, "AI") ~ "AI",
+                                str_detect(event_name, "Computing") ~ "Computing",
+                                str_detect(event_name, "Expression") ~ "Gene Expression")) %>%
+  ggplot(aes(x=rec_likelihood, fill=event_name)) +
+  geom_bar(stat="count") +
+  facet_wrap(~event_name) +
+  theme_bw() +
+  xlab("Recommendation likelihood") +
+  theme(legend.position = "none") +
+  scale_x_discrete(breaks = 1:10, labels = 1:10, limits=1:10) +
+  coord_cartesian(xlim = c(1, 10)) +
+  ggtitle("How likely are you to recommend this workshop?\nNYU Workshops 2024")
+```
+
+## QIIME2
+
+```{r}
+slido_qiime <- slido_data %>%
+  filter(event_name == 
+           "Q2-NIH_PreSurvey" | 
+         event_name == 
+           "Q2-NIH_Day_1" |
+         event_name ==
+           "Q2-NIH_Day_2" |
+         event_name ==
+           "Q2-NIH_Day_3") %>%
+  filter(!is.na(Participant.ID))
+
+slido_qiime <- slido_qiime[, colSums(is.na(slido_qiime)) != nrow(slido_qiime)]
+```
+
+### Pre-vs-post confidence
+
+```{r}
+to_plot_prepost_qiime <- rbind(
+  slido_qiime %>% filter(event_name == "Q2-NIH_PreSurvey") %>%
+  select(contains("confident")) %>% 
+  pivot_longer(everything()) %>%
+  mutate(workshop = case_when(str_detect(name, "QIIME2") ~ "QIIME2",
+                              str_detect(name, "containers") ~"Containers"),
+         pre_post = "pre"),
+ slido_qiime %>%
+   filter(event_name != "Q2-NIH_PreSurvey") %>%
+  select(contains("confident")) %>%
+  pivot_longer(everything()) %>%
+  mutate(pre_post = "post",
+         workshop = case_when(str_detect(name, "QIIME2") ~ "QIIME2",
+                              str_detect(name, "containers") ~ "Containers"))) %>% 
+mutate(
+  value = as.numeric(value),
+  pre_post = factor(pre_post, levels = c("pre", "post"))
+)
+  
+```
+
+```{r}
+totalRanksdfQ <-
+  bind_rows(
+    get_to_bind(to_plot_prepost_qiime, "pre", "Containers"),
+    get_to_bind(to_plot_prepost_qiime, "post", "Containers"),
+    get_to_bind(to_plot_prepost_qiime, "pre", "QIIME2"),
+    get_to_bind(to_plot_prepost_qiime, "post", "QIIME2"),
+  ) %>%
+  mutate(workshop_info = rownames(.)) %>%
+  separate(workshop_info, c("workshop_name", "prepost"), sep="-") %>%
+  mutate(prepost = factor(prepost, levels = c("pre", "post")))
+```
+
+```{r}
+ggplot(totalRanksdfQ, 
+                    aes(x = avgRank, 
+                        y = reorder(workshop_name, -avgRank))) +
+  geom_line(arrow = arrow(length=unit(0.30,"cm"), ends="last", type = "closed")) +
+  geom_point(aes(color = prepost), size = 3) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ylab("") +
+  xlab("Average Confidence Rank") +
+  ggtitle("How confident do you feel about ... \nQIIME2 Workshops 2024") +
+  theme(plot.margin = margin(1,1,1,1.1, "cm")) +
+  coord_cartesian(clip = "off") +
+  scale_x_continuous(limits = c(1,10), breaks = 1:10, labels = 1:10) +
+      annotation_custom(textGrob("Most\nConfident", gp=gpar(fontsize=8, fontface = "bold")),xmin=10,xmax=10,ymin=-0.02,ymax=-0.02) +
+      annotation_custom(textGrob("Least\nConfident", gp=gpar(fontsize=8, fontface= "bold")),xmin=1,xmax=1,ymin=-0.02,ymax=-0.02)
+```
+
+
+```{r}
+to_plot_prepost_qiime %>%
+  ggplot(aes(x = value, fill=pre_post)) +
+  geom_density(alpha=0.5) +
+  theme_bw() + theme(panel.background = element_blank()) +
+  theme(legend.position = "bottom") +
+  xlab("Confidence Rank") + scale_x_continuous(breaks = 1:10, labels = 1:10) +
+  facet_wrap(~workshop) +
+  ggtitle("How confident do you feel about ... \nQIIME2 Workshops 2024") +
+  scale_fill_discrete(name = "Pre or post workshop?")
+```
+
+### Recommendation likelihood
+
+```{r}
+slido_qiime %>%
+  mutate(rec_likelihood = as.numeric(How.likely.would.you.be.to.recommend..today.s..workshop.material.),
+         workshop = case_when(event_name == "Q2-NIH_Day_1" ~ "Computing + QIIME2 Metadata",
+                              event_name == "Q2-NIH_Day_2" ~ "Containers + QIIME2 Diversity",
+                              event_name == "Q2-NIH_Day_3" ~ "Reproducibility + QIIME2 Engraftment")
+                              ) %>%
+  filter(!is.na(workshop)) %>%
+  ggplot(aes(x=rec_likelihood, fill=workshop)) +
+  geom_bar(stat="count") +
+  facet_wrap(~workshop) +
+  theme_bw() +
+  xlab("Recommendation likelihood") +
+  theme(legend.position = "none") +
+  scale_x_discrete(breaks = 1:10, labels = 1:10, limits=1:10) +
+  coord_cartesian(xlim = c(1, 10)) +
+  ggtitle("How likely are you to recommend this workshop?\nQIIME2 2024") +
+  scale_y_continuous( breaks=pretty_breaks())
+  
+  
+```
