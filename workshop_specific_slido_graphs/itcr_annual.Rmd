@@ -1,0 +1,139 @@
+---
+title: "Slido graphs for ITCR Annual Meeting"
+author: "Kate Isaac"
+date: "2024-09-04"
+output: html_document
+---
+
+Note: had to [incorporate this change from metricminer](https://github.com/fhdsl/metricminer/pull/89) for this analysis to run
+
+Had to use `devtools` to load `metricminer` locally. This won't render just as. 
+
+```{r}
+library(tidyverse)
+library(grid)
+library(metricminer)
+library(janitor)
+```
+
+The method of loading the data this way takes much longer,  but the ITN dashboard only had 1/3 of the workshops due to slido changing the export file name.
+
+```{r}
+#slido_data <- read.csv("https://raw.githubusercontent.com/FredHutch/itn-dashboard/main/data/itcr_slido_data.csv")
+
+itcr_drive_id <- "https://drive.google.com/drive/folders/0AJb5Zemj0AAkUk9PVA"
+itcr_slido_data <- get_slido_files(itcr_drive_id)
+slido_data <- itcr_slido_data$`Polls-per-participant` %>% clean_names()
+```
+
+## ITCR Annual Meeting
+
+```{r}
+slido_itcr <- slido_data %>%
+  filter(event_name ==
+           "Trainee_Day_GitHub" | 
+         event_name ==
+           "Intro_to_Containers" |  #containers
+         event_name ==
+           "spatial_transcriptomics_ITN_workshop_ITCR_2024") %>% #spatial
+  filter(!is.na(participant_id))
+
+slido_itcr <- slido_itcr[, colSums(is.na(slido_itcr)) != nrow(slido_itcr)]
+```
+
+### Pre-vs-Post Confidence
+
+```{r}
+to_plot_prepost <- 
+slido_itcr %>% select(contains("confident")) %>%
+  pivot_longer(everything()) %>%
+  mutate(pre_post = if_else(grepl("now", name), "post", "pre"),
+         workshop = case_when(str_detect(name, "git_hub") ~ "GitHub",
+                                str_detect(name, "containers") ~ "Containers",
+                                str_detect(name, "spatial") ~ "Spatial Transcriptomics"),
+         value = as.numeric(value))
+
+```
+
+```{r}
+
+get_to_bind <- function(inputdf, prepost, workshopOI){
+  nrankOI <- nrow(inputdf %>%
+    filter(pre_post == prepost & workshop == workshopOI) %>% drop_na())
+  
+  return(inputdf %>%
+    filter(pre_post == prepost & workshop == workshopOI) %>%
+    select(value) %>% `colnames<-`(c(paste(workshopOI,prepost, sep="-"))) %>%
+    colSums(na.rm = TRUE) %>%
+    as.data.frame() %>% `colnames<-`(c("totalRank")) %>%
+    mutate(avgRank = totalRank / nrankOI))
+}
+
+totalRanksdf <-
+  bind_rows(
+    get_to_bind(to_plot_prepost, "pre", "GitHub"),
+    get_to_bind(to_plot_prepost, "post", "GitHub"),
+    get_to_bind(to_plot_prepost, "pre", "Containers"),
+    get_to_bind(to_plot_prepost, "post", "Containers"),
+    get_to_bind(to_plot_prepost, "pre", "Spatial Transcriptomics"),
+    get_to_bind(to_plot_prepost, "post", "Spatial Transcriptomics")
+  ) %>%
+  mutate(workshop_info = rownames(.)) %>%
+  separate(workshop_info, c("workshop_name", "prepost"), sep="-") %>%
+  mutate(prepost = factor(prepost, levels = c("pre", "post")))
+```
+
+```{r}
+ggplot(totalRanksdf, 
+                    aes(x = avgRank, 
+                        y = reorder(workshop_name, -avgRank))) +
+  geom_line(arrow = arrow(length=unit(0.30,"cm"), ends="last", type = "closed")) +
+  geom_point(aes(color = prepost), size = 3) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ylab("") +
+  xlab("Average Confidence Rank") +
+  ggtitle("How confident do you feel about ... \nITCR Annual Workshops 2024") +
+  theme(plot.margin = margin(1,1,1,1.1, "cm")) +
+  coord_cartesian(clip = "off") +
+  scale_x_continuous(limits = c(1,10), breaks = 1:10, labels = 1:10) +
+      annotation_custom(textGrob("Most\nConfident", gp=gpar(fontsize=8, fontface = "bold")),xmin=10,xmax=10,ymin=-0.1,ymax=-0.1) +
+      annotation_custom(textGrob("Least\nConfident", gp=gpar(fontsize=8, fontface= "bold")),xmin=1,xmax=1,ymin=-0.1,ymax=-0.1)
+
+ggsave("plots/itcr_annual_slido_confidence_dumbbell.png")
+```
+
+```{r}
+to_plot_prepost %>%
+  mutate(pre_post = factor(pre_post, levels = c("pre", "post"))) %>%
+  ggplot(aes(x = value, fill=pre_post)) +
+  geom_density(alpha=0.5) +
+  theme_bw() + theme(panel.background = element_blank()) +
+  theme(legend.position = "bottom") +
+  xlab("Confidence Rank") + scale_x_continuous(breaks = 1:10, labels = 1:10) +
+  facet_wrap(~workshop) +
+  ggtitle("How confident do you feel about ... \nITCR Annual Workshops 2024") +
+  scale_fill_discrete(name = "Pre or post workshop?")
+
+ggsave("plots/itcr_annual_slido_confidence_density.png")
+```
+
+### Workshop Recommendation
+```{r}
+slido_itcr %>%
+  mutate(rec_likelihood = as.numeric(coalesce(how_likely_are_you_to_recommend_this_workshop, how_likely_would_you_be_to_recommend_this_workshop)),
+         event_name = case_when(str_detect(event_name, "GitHub") ~ "GitHub",
+                                str_detect(event_name, "Containers") ~ "Containers",
+                                str_detect(event_name, "spatial") ~ "Spatial Transcriptomics")) %>%
+  ggplot(aes(x=rec_likelihood, fill=event_name)) +
+  geom_bar(stat="count") +
+  facet_wrap(~event_name) +
+  theme_bw() +
+  xlab("Recommendation likelihood") +
+  theme(legend.position = "none") +
+  scale_x_discrete(breaks = 1:10, labels = 1:10, limits=1:10) +
+  coord_cartesian(xlim = c(1, 10)) +
+  ggtitle("How likely are you to recommend this workshop?\nITCR Annual Workshops 2024")
+
+ggsave("plots/itcr_annual_slido_recommendation.png")
+```
